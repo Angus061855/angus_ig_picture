@@ -1,30 +1,17 @@
-name: Auto Post IG + Facebook
+name: Instagram 發文
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # Taiwan 16:00
-    - cron: '0 10 * * *' # Taiwan 18:00
+    - cron: '0 8 * * *'  # 台灣 16:00
+    - cron: '0 10 * * *' # 台灣 18:00
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'normal=正常發文; facebook_check=只檢查; facebook_retry=只補發上次 Facebook'
-        type: choice
-        default: normal
-        options:
-          - normal
-          - facebook_check
-          - facebook_retry
-      notion_page_id:
-        description: '單獨補發 Facebook 時填入 Notion 文章 ID'
-        type: string
-        required: false
+
+permissions:
+  contents: read
 
 jobs:
   post:
     name: Publish Instagram
-    if: ${{ github.event_name == 'schedule' || inputs.mode == 'normal' }}
-    outputs:
-      notion_page_id: ${{ steps.instagram.outputs.notion_page_id }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,26 +40,18 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+        run: python Instagram.py
 
-  facebook:
-    name: Publish Facebook
-    needs: post
-    if: >-
-      ${{ always() && !cancelled() &&
-          (inputs.mode == 'facebook_check' || inputs.mode == 'facebook_retry' ||
-           (needs.post.result == 'success' && needs.post.outputs.notion_page_id != '')) }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install requests
-      - name: Publish or check Facebook only
+      - name: Save published record for Facebook
+        if: steps.instagram.outputs.notion_page_id != ''
         env:
-          PUBLISH_MODE: ${{ inputs.mode || 'normal' }}
-          NOTION_PAGE_ID: ${{ needs.post.outputs.notion_page_id || inputs.notion_page_id }}
-          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
-        run: python facebook.py
+          NOTION_PAGE_ID: ${{ steps.instagram.outputs.notion_page_id }}
+        run: |
+          mkdir -p work
+          printf '%s' "$NOTION_PAGE_ID" > work/notion_page_id.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.instagram.outputs.notion_page_id != ''
+        with:
+          name: published-notion-record
+          path: work/notion_page_id.txt
+          retention-days: 7
