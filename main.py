@@ -297,6 +297,27 @@ def post_to_instagram(image_url, caption):
     return pub_res.json().get("id") is not None
 
 
+
+# ========== Facebook 粉專發布 ==========
+def post_to_facebook(image_url, caption):
+    try:
+        res = requests.post(
+            "https://graph.facebook.com/v27.0/1393144653886528/photos",
+            headers={"Authorization": f"Bearer {os.environ['FB_PAGE_ACCESS_TOKEN']}"},
+            data={"url": image_url, "message": caption},
+            timeout=60,
+        )
+        data = res.json()
+        if res.ok and data.get("post_id"):
+            print(f"Facebook 發布成功：{data['post_id']}")
+            return True
+        print("Facebook 發布失敗，HTTP：", res.status_code,
+              "錯誤代碼：", data.get("error", {}).get("code"))
+    except (requests.RequestException, ValueError):
+        print("Facebook 回應異常，請先檢查粉專是否已發文，勿直接重跑。")
+    return False
+
+
 def send_telegram_notification(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
@@ -349,7 +370,23 @@ def main():
 
     if success:
         update_status_published(page_id)
-        send_telegram_notification(f"✅ angus IG 語錄圖片 發布成功！\n\n{text[:50]}...")
+        if os.environ.get("FB_PAGE_ACCESS_TOKEN"):
+            if not post_to_facebook(image_url, caption):
+                # IG 已發布，保留「已發」避免補發時重複發到 IG。
+                note = "IG 已發；Facebook 未確認成功，請檢查粉專後手動補發，勿改回待發。"
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{page_id}",
+                    headers=NOTION_HEADERS,
+                    json={"properties": {"備註": {
+                        "rich_text": [{"text": {"content": note}}]
+                    }}},
+                    timeout=30,
+                )
+                send_telegram_notification(f"⚠️ {note}\n\n{text[:50]}...")
+                raise SystemExit(1)
+            send_telegram_notification(f"✅ IG 與 Facebook 語錄圖片發布成功！\n\n{text[:50]}...")
+        else:
+            send_telegram_notification(f"✅ angus IG 語錄圖片 發布成功！\n\n{text[:50]}...")
         print("發布成功！")
     else:
         update_notion_status_failed(page_id, "IG 發布失敗")
