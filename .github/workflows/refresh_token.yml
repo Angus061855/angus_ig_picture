@@ -52,10 +52,10 @@ jobs:
           }
           res = requests.get(refresh_url, params=params)
           data = res.json()
-          print(f"換新回應：{data}")
+          print(f"換新 HTTP 狀態：{res.status_code}")
 
           if "access_token" not in data:
-              print(f"換新失敗：{data}")
+              print("換新失敗，錯誤代碼：", data.get("error", {}).get("code", "unknown"))
               sys.exit(1)
 
           new_token = data["access_token"]
