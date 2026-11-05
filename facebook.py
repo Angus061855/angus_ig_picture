@@ -68,36 +68,78 @@ def post_to_facebook(image_url, caption):
 
 
 
+def notion(method, path, **kwargs):
+    res = requests.request(method, f"https://api.notion.com/v1/{path}",
+                           headers=NOTION_HEADERS, timeout=30, **kwargs)
+    if not res.ok:
+        raise SystemExit(f"Notion HTTP {res.status_code}: 請確認 Facebook 資料庫已連接原本的 Notion 整合。")
+    return res.json()
+
+
+def patch_page(page_id, properties):
+    return notion("PATCH", f"pages/{page_id}", json={"properties": properties})
+
+
 def main():
-    if os.environ.get("PUBLISH_MODE") == "facebook_check":
+    import random
+    from datetime import datetime, timezone
+    from uuid import UUID
+    database_id = str(UUID(os.environ["FB_NOTION_DATABASE_ID"]))
+    database = notion("GET", f"databases/{database_id}")
+    schema = database["properties"]
+    for name, kind in {"文字": "rich_text", "狀態": "status", "文案": "rich_text",
+                       "圖片網址": "url", "備註": "rich_text", "發文時間": "date"}.items():
+        if schema.get(name, {}).get("type") != kind:
+            raise SystemExit(f"Facebook 資料庫缺少欄位或類型不符：{name}")
+    print("Facebook Notion 資料庫：", database_id,
+          "".join(t.get("plain_text", "") for t in database.get("title", [])))
+    posts = notion("POST", f"databases/{database_id}/query", json={
+        "filter": {"property": "狀態", "status": {"equals": "待發"}}, "page_size": 100
+    })["results"]
+    print("Facebook 待發文章：", len(posts))
+    if os.environ.get("PUBLISH_MODE", "facebook_check") == "facebook_check":
         facebook_page_token()
+        print("資料庫與粉專連線檢查成功；未發布、未修改文章。")
         return
     page_id = os.environ.get("NOTION_PAGE_ID", "").strip()
-    if not page_id:
-        raise SystemExit("No Notion page selected; nothing was published.")
-    res = requests.get(f"https://api.notion.com/v1/pages/{page_id}",
-                       headers=NOTION_HEADERS, timeout=30)
-    res.raise_for_status()
-    props = res.json()["properties"]
-    note = "".join(t["plain_text"] for t in props.get("備註", {}).get("rich_text", []))
-    if "Facebook 發布成功" in note or "Facebook 補發成功" in note:
-        print("Facebook already published this record; skipped.")
+    if page_id:
+        page = notion("GET", f"pages/{str(UUID(page_id))}")
+        if str(UUID(page.get("parent", {}).get("database_id", ""))) != database_id:
+            raise SystemExit("文章不在 Facebook 專用資料庫，停止。")
+    elif posts:
+        page = random.choice(posts)
+    else:
+        print("Facebook 沒有待發文章。")
         return
-    if props["狀態"]["status"]["name"] != "已發":
-        raise SystemExit("IG has not marked this record published; stopped.")
+    props = page["properties"]
+    if props["狀態"]["status"]["name"] != "待發":
+        raise SystemExit("只處理待發文章；補發前請先確認粉專沒有重複內容。")
+    page_id = page["id"]
     image_url = props["圖片網址"]["url"]
     caption = "".join(t["plain_text"] for t in props["文案"]["rich_text"])
-    if not image_url or not caption:
-        raise SystemExit("Missing image or caption; stopped.")
+    text = "".join(t["plain_text"] for t in props["文字"]["rich_text"])
+    if (not image_url or not caption) and not text:
+        raise SystemExit("缺少文字，無法產生圖片或文案。")
+    # Reuse only the image/caption helpers; never invoke Instagram.main or its publisher.
+    from Instagram import create_image, upload_to_cloudinary, create_caption
+    if not image_url:
+        image_url = upload_to_cloudinary(create_image(text, "facebook-output.png"))
+    if not caption:
+        caption = create_caption(text)
+    patch_page(page_id, {
+        "圖片網址": {"url": image_url},
+        "文案": {"rich_text": [{"text": {"content": caption[:2000]}}]},
+        "狀態": {"status": {"name": "進行中"}},
+    })
     success = post_to_facebook(image_url, caption)
-    note = ("IG 已發；Facebook 發布成功。" if success else
-            "IG 已發；Facebook 未確認成功，請檢查粉專後單獨補發 Facebook，勿重跑 IG。")
-    res = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
-                         headers=NOTION_HEADERS, timeout=30,
-                         json={"properties": {"備註": {"rich_text": [
-                             {"text": {"content": note}}
-                         ]}}})
-    res.raise_for_status()
+    properties = {
+        "備註": {"rich_text": [{"text": {"content":
+            "Facebook 發布成功。" if success else "Facebook 未確認成功；請檢查粉專及執行紀錄，確認沒有貼文後再改回待發。"}}]},
+    }
+    if success:
+        properties["狀態"] = {"status": {"name": "已發"}}
+        properties["發文時間"] = {"date": {"start": datetime.now(timezone.utc).isoformat()}}
+    patch_page(page_id, properties)
     if not success:
         raise SystemExit(1)
 
