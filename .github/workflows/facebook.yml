@@ -4,73 +4,44 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '只檢查連線，或發佈指定 Notion 文章'
+        description: '只檢查連線，或從 Facebook 資料庫發文'
         type: choice
         default: facebook_check
         options:
           - facebook_check
-          - facebook_retry
+          - facebook_publish
       notion_page_id:
-        description: '發文時填入已完成圖片與文案的 Notion 文章 ID'
+        description: '可留空隨機選待發文章；只接受 Facebook 資料庫的文章 ID'
         type: string
         required: false
-  workflow_run:
-    workflows: ['Instagram 發文']
-    types: [completed]
-    branches: [main]
 
 permissions:
   contents: read
-  actions: read
+
+concurrency:
+  group: facebook-publish
+  cancel-in-progress: false
 
 jobs:
   facebook:
     name: Publish Facebook only
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
-          (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.event == 'schedule' &&
-           github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests
-      - name: Find the scheduled Instagram record
-        if: github.event_name == 'workflow_run'
-        id: record
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const {data} = await github.rest.actions.listWorkflowRunArtifacts({
-              ...context.repo, run_id: context.payload.workflow_run.id
-            });
-            core.setOutput('found', data.artifacts.some(a =>
-              a.name === 'published-notion-record' && !a.expired));
-      - uses: actions/download-artifact@v4
-        if: github.event_name == 'workflow_run' && steps.record.outputs.found == 'true'
-        with:
-          name: published-notion-record
-          path: work/instagram-record
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-      - name: Read the scheduled record
-        if: github.event_name == 'workflow_run' && steps.record.outputs.found == 'true'
-        run: |
-          python - <<'PY'
-          import os, uuid
-          from pathlib import Path
-          page_id = str(uuid.UUID(Path("work/instagram-record/notion_page_id.txt").read_text().strip()))
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              output.write(f"NOTION_PAGE_ID={page_id}\n")
-          PY
+      - run: pip install Pillow requests cloudinary google-genai
       - name: Publish or check Facebook only
-        if: github.event_name == 'workflow_dispatch' || steps.record.outputs.found == 'true'
         env:
-          PUBLISH_MODE: ${{ inputs.mode || 'normal' }}
-          NOTION_PAGE_ID: ${{ inputs.notion_page_id || env.NOTION_PAGE_ID }}
+          PUBLISH_MODE: ${{ inputs.mode }}
+          NOTION_PAGE_ID: ${{ inputs.notion_page_id }}
+          FB_NOTION_DATABASE_ID: '40f11a31-6c9e-8003-9d73-e9a4456cdcc0'
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python facebook.py
