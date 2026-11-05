@@ -2,8 +2,8 @@ name: Auto Post IG ig圖片發文
 
 on:
   schedule:
-    - cron: '0 10 * * *'
-    - cron: '0 12 * * *'
+    - cron: '0 8 * * *'  # Taiwan 16:00
+    - cron: '0 10 * * *' # Taiwan 18:00
   workflow_dispatch:
 
 jobs:
