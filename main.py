@@ -1,5 +1,4 @@
 import time
-import re
 import os
 import random
 import requests
@@ -299,94 +298,6 @@ def post_to_instagram(image_url, caption):
 
 
 
-# ========== Facebook 粉專發布 ==========
-def facebook_error(res, data):
-    error = data.get("error", {})
-    detail = {key: error.get(key) for key in (
-        "code", "error_subcode", "message", "error_user_title", "error_user_msg"
-    ) if error.get(key) is not None}
-    safe = str(detail)
-    for value in (os.environ.get("FB_PAGE_ACCESS_TOKEN"), IG_ACCESS_TOKEN):
-        if value:
-            safe = safe.replace(value, "[REDACTED]")
-    print("Facebook HTTP:", res.status_code,
-          re.sub(r"EAA[A-Za-z0-9]+", "[REDACTED]", safe))
-
-
-def facebook_page_token():
-    token = os.environ["FB_PAGE_ACCESS_TOKEN"]
-    def get(path, fields):
-        res = requests.get(f"https://graph.facebook.com/v27.0/{path}",
-                           headers={"Authorization": f"Bearer {token}"},
-                           params={"fields": fields}, timeout=30)
-        data = res.json()
-        if not res.ok:
-            facebook_error(res, data)
-            raise SystemExit(1)
-        return data
-    identity = get("me", "id,name")
-    if identity.get("id") != "1393144653886528":
-        # An authorized user token must be exchanged for this Page's token.
-        page = get("1393144653886528", "id,name,access_token")
-        token = page.get("access_token")
-        if not token:
-            raise SystemExit("No Page token returned. No post was sent.")
-        identity = get("me", "id,name")
-    if identity.get("id") != "1393144653886528":
-        raise SystemExit("Unexpected Page identity. No post was sent.")
-    print("Facebook publishing identity:", identity["id"], identity["name"])
-    return token
-
-
-def facebook_existing_post(mode):
-    # Only the already-published IG trial; never create another IG post.
-    facebook_page_token()
-    if mode == "facebook_check":
-        return
-    page_id = "33a11a31-6c9e-8183-9a35-e3ab7a8968fc"
-    res = requests.get(f"https://api.notion.com/v1/pages/{page_id}",
-                       headers=NOTION_HEADERS, timeout=30)
-    res.raise_for_status()
-    props = res.json()["properties"]
-    notes = "".join(t["plain_text"] for t in props["備註"]["rich_text"])
-    if "Facebook 補發成功" in notes:
-        print("This post has already been repaired; no post was sent.")
-        return
-    if props["狀態"]["status"]["name"] != "已發":
-        raise SystemExit("Expected an already-published IG post; stopped.")
-    image_url = props["圖片網址"]["url"]
-    caption = "".join(t["plain_text"] for t in props["文案"]["rich_text"])
-    if not image_url or not caption:
-        raise SystemExit("Missing original image or caption; stopped.")
-    if not post_to_facebook(image_url, caption):
-        raise SystemExit(1)
-    res = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
-                         headers=NOTION_HEADERS, timeout=30,
-                         json={"properties": {"備註": {"rich_text": [
-                             {"text": {"content": "IG 已發；Facebook 補發成功。"}}
-                         ]}}})
-    res.raise_for_status()
-
-
-def post_to_facebook(image_url, caption):
-    try:
-        token = facebook_page_token()
-        res = requests.post(
-            "https://graph.facebook.com/v27.0/1393144653886528/photos",
-            headers={"Authorization": f"Bearer {token}"},
-            data={"url": image_url, "message": caption},
-            timeout=60,
-        )
-        data = res.json()
-        if res.ok and data.get("post_id"):
-            print(f"Facebook 發布成功：{data['post_id']}")
-            return True
-        facebook_error(res, data)
-    except (requests.RequestException, ValueError):
-        print("Facebook 回應異常，請先檢查粉專是否已發文，勿直接重跑。")
-    return False
-
-
 def send_telegram_notification(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
@@ -439,23 +350,10 @@ def main():
 
     if success:
         update_status_published(page_id)
-        if os.environ.get("FB_PAGE_ACCESS_TOKEN"):
-            if not post_to_facebook(image_url, caption):
-                # IG 已發布，保留「已發」避免補發時重複發到 IG。
-                note = "IG 已發；Facebook 未確認成功，請檢查粉專後手動補發，勿改回待發。"
-                requests.patch(
-                    f"https://api.notion.com/v1/pages/{page_id}",
-                    headers=NOTION_HEADERS,
-                    json={"properties": {"備註": {
-                        "rich_text": [{"text": {"content": note}}]
-                    }}},
-                    timeout=30,
-                )
-                send_telegram_notification(f"⚠️ {note}\n\n{text[:50]}...")
-                raise SystemExit(1)
-            send_telegram_notification(f"✅ IG 與 Facebook 語錄圖片發布成功！\n\n{text[:50]}...")
-        else:
-            send_telegram_notification(f"✅ angus IG 語錄圖片 發布成功！\n\n{text[:50]}...")
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write(f"notion_page_id={page_id}\n")
+        send_telegram_notification(f"✅ angus IG 語錄圖片 發布成功！\n\n{text[:50]}...")
         print("發布成功！")
     else:
         update_notion_status_failed(page_id, "IG 發布失敗")
@@ -464,10 +362,4 @@ def main():
 
 
 if __name__ == "__main__":
-    mode = os.environ.get("PUBLISH_MODE", "normal") or "normal"
-    if mode in ("facebook_check", "facebook_retry"):
-        facebook_existing_post(mode)
-    elif mode == "normal":
-        main()
-    else:
-        raise SystemExit("Unknown publishing mode")
+    main()
