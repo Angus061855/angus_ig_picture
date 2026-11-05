@@ -5,6 +5,15 @@ on:
     - cron: '0 8 * * *'  # Taiwan 16:00
     - cron: '0 10 * * *' # Taiwan 18:00
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'normal=正常發文; facebook_check=只檢查; facebook_retry=只補發上次 Facebook'
+        type: choice
+        default: normal
+        options:
+          - normal
+          - facebook_check
+          - facebook_retry
 
 jobs:
   post:
@@ -25,6 +34,7 @@ jobs:
 
       - name: Run main script
         env:
+          PUBLISH_MODE: ${{ inputs.mode || 'normal' }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
