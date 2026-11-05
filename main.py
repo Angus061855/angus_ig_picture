@@ -1,4 +1,5 @@
 import time
+import re
 import os
 import random
 import requests
@@ -299,6 +300,59 @@ def post_to_instagram(image_url, caption):
 
 
 # ========== Facebook 粉專發布 ==========
+def facebook_error(res, data):
+    error = data.get("error", {})
+    detail = {key: error.get(key) for key in (
+        "code", "error_subcode", "message", "error_user_title", "error_user_msg"
+    ) if error.get(key) is not None}
+    safe = str(detail)
+    for value in (os.environ.get("FB_PAGE_ACCESS_TOKEN"), IG_ACCESS_TOKEN):
+        if value:
+            safe = safe.replace(value, "[REDACTED]")
+    print("Facebook HTTP:", res.status_code,
+          re.sub(r"EAA[A-Za-z0-9]+", "[REDACTED]", safe))
+
+
+def facebook_existing_post(mode):
+    # Only the already-published IG trial; never create another IG post.
+    headers = {"Authorization": f"Bearer {os.environ['FB_PAGE_ACCESS_TOKEN']}"}
+    res = requests.get("https://graph.facebook.com/v27.0/me",
+                       headers=headers, params={"fields": "id,name"}, timeout=30)
+    identity = res.json()
+    if not res.ok:
+        facebook_error(res, identity)
+        raise SystemExit(1)
+    print("Facebook token identity:", identity.get("id"), identity.get("name"))
+    if identity.get("id") != "1393144653886528":
+        print("Token is not for the intended Facebook Page. No post was sent.")
+        raise SystemExit(1)
+    if mode == "facebook_check":
+        return
+    page_id = "33a11a31-6c9e-8183-9a35-e3ab7a8968fc"
+    res = requests.get(f"https://api.notion.com/v1/pages/{page_id}",
+                       headers=NOTION_HEADERS, timeout=30)
+    res.raise_for_status()
+    props = res.json()["properties"]
+    notes = "".join(t["plain_text"] for t in props["備註"]["rich_text"])
+    if "Facebook 補發成功" in notes:
+        print("This post has already been repaired; no post was sent.")
+        return
+    if props["狀態"]["status"]["name"] != "已發":
+        raise SystemExit("Expected an already-published IG post; stopped.")
+    image_url = props["圖片網址"]["url"]
+    caption = "".join(t["plain_text"] for t in props["文案"]["rich_text"])
+    if not image_url or not caption:
+        raise SystemExit("Missing original image or caption; stopped.")
+    if not post_to_facebook(image_url, caption):
+        raise SystemExit(1)
+    res = requests.patch(f"https://api.notion.com/v1/pages/{page_id}",
+                         headers=NOTION_HEADERS, timeout=30,
+                         json={"properties": {"備註": {"rich_text": [
+                             {"text": {"content": "IG 已發；Facebook 補發成功。"}}
+                         ]}}})
+    res.raise_for_status()
+
+
 def post_to_facebook(image_url, caption):
     try:
         res = requests.post(
@@ -311,8 +365,7 @@ def post_to_facebook(image_url, caption):
         if res.ok and data.get("post_id"):
             print(f"Facebook 發布成功：{data['post_id']}")
             return True
-        print("Facebook 發布失敗，HTTP：", res.status_code,
-              "錯誤代碼：", data.get("error", {}).get("code"))
+        facebook_error(res, data)
     except (requests.RequestException, ValueError):
         print("Facebook 回應異常，請先檢查粉專是否已發文，勿直接重跑。")
     return False
@@ -395,4 +448,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    mode = os.environ.get("PUBLISH_MODE", "normal") or "normal"
+    if mode in ("facebook_check", "facebook_retry"):
+        facebook_existing_post(mode)
+    elif mode == "normal":
+        main()
+    else:
+        raise SystemExit("Unknown publishing mode")
