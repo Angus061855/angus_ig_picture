@@ -72,7 +72,16 @@ def notion(method, path, **kwargs):
     res = requests.request(method, f"https://api.notion.com/v1/{path}",
                            headers=NOTION_HEADERS, timeout=30, **kwargs)
     if not res.ok:
-        raise SystemExit(f"Notion HTTP {res.status_code}: 請確認 Facebook 資料庫已連接原本的 Notion 整合。")
+        try:
+            error = res.json()
+        except ValueError:
+            error = {}
+        detail = str(error.get("message", "Notion 未提供錯誤說明"))
+        for key in ("NOTION_API_KEY", "FB_PAGE_ACCESS_TOKEN", "RESOLVED_FB_TOKEN"):
+            value = os.environ.get(key)
+            if value:
+                detail = detail.replace(value, "[REDACTED]")
+        raise SystemExit(f"Notion {method} HTTP {res.status_code}: {error.get('code', '')} {detail}")
     return res.json()
 
 
@@ -91,6 +100,11 @@ def main():
                        "圖片網址": "url", "備註": "rich_text", "發文時間": "date"}.items():
         if schema.get(name, {}).get("type") != kind:
             raise SystemExit(f"Facebook 資料庫缺少欄位或類型不符：{name}")
+    status_names = {item["name"] for item in schema["狀態"]["status"]["options"]}
+    missing = {"待發", "進行中", "已發"} - status_names
+    if missing:
+        raise SystemExit("Notion 狀態缺少選項：" + "、".join(sorted(missing)))
+    print("Notion 狀態選項檢查成功：待發、進行中、已發")
     print("Facebook Notion 資料庫：", database_id,
           "".join(t.get("plain_text", "") for t in database.get("title", [])))
     posts = notion("POST", f"databases/{database_id}/query", json={
