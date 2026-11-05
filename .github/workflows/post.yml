@@ -1,4 +1,4 @@
-name: Auto Post IG ig圖片發文
+name: Auto Post IG + Facebook
 
 on:
   schedule:
@@ -14,9 +14,17 @@ on:
           - normal
           - facebook_check
           - facebook_retry
+      notion_page_id:
+        description: '單獨補發 Facebook 時填入 Notion 文章 ID'
+        type: string
+        required: false
 
 jobs:
   post:
+    name: Publish Instagram
+    if: ${{ github.event_name == 'schedule' || inputs.mode == 'normal' }}
+    outputs:
+      notion_page_id: ${{ steps.instagram.outputs.notion_page_id }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,9 +40,9 @@ jobs:
           pip install Pillow requests cloudinary google-genai
           pip list | grep google
 
-      - name: Run main script
+      - name: Publish Instagram only
+        id: instagram
         env:
-          PUBLISH_MODE: ${{ inputs.mode || 'normal' }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
@@ -42,8 +50,29 @@ jobs:
           CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_ACCOUNT_ID: ${{ secrets.IG_ACCOUNT_ID }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
+
+  facebook:
+    name: Publish Facebook
+    needs: post
+    if: >-
+      ${{ always() && !cancelled() &&
+          (inputs.mode == 'facebook_check' || inputs.mode == 'facebook_retry' ||
+           (needs.post.result == 'success' && needs.post.outputs.notion_page_id != '')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Publish or check Facebook only
+        env:
+          PUBLISH_MODE: ${{ inputs.mode || 'normal' }}
+          NOTION_PAGE_ID: ${{ needs.post.outputs.notion_page_id || inputs.notion_page_id }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+        run: python facebook.py
