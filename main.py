@@ -313,19 +313,34 @@ def facebook_error(res, data):
           re.sub(r"EAA[A-Za-z0-9]+", "[REDACTED]", safe))
 
 
+def facebook_page_token():
+    token = os.environ["FB_PAGE_ACCESS_TOKEN"]
+    def get(path, fields):
+        res = requests.get(f"https://graph.facebook.com/v27.0/{path}",
+                           headers={"Authorization": f"Bearer {token}"},
+                           params={"fields": fields}, timeout=30)
+        data = res.json()
+        if not res.ok:
+            facebook_error(res, data)
+            raise SystemExit(1)
+        return data
+    identity = get("me", "id,name")
+    if identity.get("id") != "1393144653886528":
+        # An authorized user token must be exchanged for this Page's token.
+        page = get("1393144653886528", "id,name,access_token")
+        token = page.get("access_token")
+        if not token:
+            raise SystemExit("No Page token returned. No post was sent.")
+        identity = get("me", "id,name")
+    if identity.get("id") != "1393144653886528":
+        raise SystemExit("Unexpected Page identity. No post was sent.")
+    print("Facebook publishing identity:", identity["id"], identity["name"])
+    return token
+
+
 def facebook_existing_post(mode):
     # Only the already-published IG trial; never create another IG post.
-    headers = {"Authorization": f"Bearer {os.environ['FB_PAGE_ACCESS_TOKEN']}"}
-    res = requests.get("https://graph.facebook.com/v27.0/me",
-                       headers=headers, params={"fields": "id,name"}, timeout=30)
-    identity = res.json()
-    if not res.ok:
-        facebook_error(res, identity)
-        raise SystemExit(1)
-    print("Facebook token identity:", identity.get("id"), identity.get("name"))
-    if identity.get("id") != "1393144653886528":
-        print("Token is not for the intended Facebook Page. No post was sent.")
-        raise SystemExit(1)
+    facebook_page_token()
     if mode == "facebook_check":
         return
     page_id = "33a11a31-6c9e-8183-9a35-e3ab7a8968fc"
@@ -355,9 +370,10 @@ def facebook_existing_post(mode):
 
 def post_to_facebook(image_url, caption):
     try:
+        token = facebook_page_token()
         res = requests.post(
             "https://graph.facebook.com/v27.0/1393144653886528/photos",
-            headers={"Authorization": f"Bearer {os.environ['FB_PAGE_ACCESS_TOKEN']}"},
+            headers={"Authorization": f"Bearer {token}"},
             data={"url": image_url, "message": caption},
             timeout=60,
         )
