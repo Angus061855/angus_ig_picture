@@ -2,8 +2,8 @@ name: Instagram 發文
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # 台灣 16:00
-    - cron: '0 10 * * *' # 台灣 18:00
+    - cron: '0 2 * * *'  # 台灣 16:00
+    - cron: '0 4 * * *' # 台灣 18:00
   workflow_dispatch:
 
 permissions:
